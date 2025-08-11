@@ -16,3 +16,5 @@ requests
 sqlalchemy
 psycopg2-binary
 pgvector
+python-multipart
+
