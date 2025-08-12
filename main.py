@@ -1,5 +1,5 @@
 from fastapi import FastAPI
-from routes import router as main_router   # This is your routes.py
+from main_routes import router as main_router   # This is your routes.py
 from routes.embeddings import router as embeddings_router
 import os
 import uvicorn
