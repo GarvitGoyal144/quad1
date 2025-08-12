@@ -61,19 +61,7 @@ async def hackrx_submission(
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
 
-@router.post("/upload")
-async def upload_file(file: UploadFile = File(...)):
-    try:
-        temp_path = tempfile.mktemp(suffix=f".{file.filename.split('.')[-1]}")
-        with open(temp_path, "wb") as f:
-            f.write(await file.read())
 
-        # TODO: Ingest file content and build index here
-
-        return {"message": "File uploaded and ingested successfully."}
-
-    except Exception as e:
-        return JSONResponse(content={"error": str(e)}, status_code=500)
 
 @router.post("/ask")
 async def ask_question(payload: dict = Body(...)):

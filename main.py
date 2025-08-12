@@ -1,4 +1,5 @@
 from fastapi import FastAPI
+from routes import router as main_router   # This is your routes.py
 from routes.embeddings import router as embeddings_router
 import os
 import uvicorn
@@ -6,6 +7,7 @@ import uvicorn
 app = FastAPI(title="Document Embedding API with Gemini & pgvector")
 
 # Include routes
+app.include_router(main_router)
 app.include_router(embeddings_router, prefix="/api")
 
 @app.get("/")
