@@ -27,6 +27,31 @@ def get_embedding_from_gemini(text: str):
     data = response.json()
     return data["embedding"]["values"]
 
+import fitz  # PyMuPDF
+import docx
+
+def extract_text_from_pdf(file_path):
+    text = ""
+    with fitz.open(file_path) as pdf:
+        for page in pdf:
+            text += page.get_text()
+    return text
+
+def extract_text_from_docx(file_path):
+    doc = docx.Document(file_path)
+    return "\n".join([para.text for para in doc.paragraphs])
+
+def extract_text_from_email(file_path):
+    import email
+    with open(file_path, "rb") as f:
+        msg = email.message_from_binary_file(f)
+    text_parts = []
+    for part in msg.walk():
+        if part.get_content_type() == "text/plain":
+            text_parts.append(part.get_payload(decode=True).decode(errors="ignore"))
+    return "\n".join(text_parts)
+
+
 @router.post("/upload")
 async def upload_file(file: UploadFile = File(...), db: Session = Depends(get_db)):
     # Save file temporarily
@@ -36,9 +61,17 @@ async def upload_file(file: UploadFile = File(...), db: Session = Depends(get_db
     with open(file_path, "wb") as f:
         f.write(await file.read())
 
-    # Read content (simple text files; for PDFs, integrate pdfminer)
-    with open(file_path, "r", encoding="utf-8") as f:
-        content = f.read()
+    # Detect and extract text based on file type
+    filename_lower = file.filename.lower()
+    if filename_lower.endswith(".pdf"):
+        content = extract_text_from_pdf(file_path)
+    elif filename_lower.endswith(".docx"):
+        content = extract_text_from_docx(file_path)
+    elif filename_lower.endswith(".eml"):
+        content = extract_text_from_email(file_path)
+    else:  # Default: try reading as plain text
+        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+            content = f.read()
 
     # Get embedding
     embedding = get_embedding_from_gemini(content)
