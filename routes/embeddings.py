@@ -1,19 +1,25 @@
 import os
 import tempfile
-from fastapi import APIRouter, UploadFile, File, Depends
+import shutil
+import requests
+import fitz  # PyMuPDF
+import docx
+from fastapi import APIRouter, UploadFile, File, Depends, HTTPException
 from sqlalchemy.orm import Session
+from dotenv import load_dotenv
 from db import get_db
 from models import DocumentEmbedding
-from dotenv import load_dotenv
-import requests
 
+# Load environment variables
 load_dotenv()
 
 router = APIRouter()
 
+# Gemini API config
 GEMINI_API_KEY = os.getenv("GOOGLE_API_KEY")
 GEMINI_EMBED_URL = "https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:embedContent"
 
+# ---------- Gemini Embedding ----------
 def get_embedding_from_gemini(text: str):
     payload = {
         "model": "models/text-embedding-004",
@@ -23,13 +29,20 @@ def get_embedding_from_gemini(text: str):
         f"{GEMINI_EMBED_URL}?key={GEMINI_API_KEY}",
         json=payload
     )
-    response.raise_for_status()
+
+    if response.status_code != 200:
+        raise HTTPException(
+            status_code=response.status_code,
+            detail=f"Gemini API error: {response.text}"
+        )
+
     data = response.json()
-    return data["embedding"]["values"]
+    try:
+        return data["embedding"]["values"]
+    except KeyError:
+        raise HTTPException(status_code=500, detail="Invalid Gemini API response format.")
 
-import fitz  # PyMuPDF
-import docx
-
+# ---------- File Parsing ----------
 def extract_text_from_pdf(file_path):
     text = ""
     with fitz.open(file_path) as pdf:
@@ -51,7 +64,12 @@ def extract_text_from_email(file_path):
             text_parts.append(part.get_payload(decode=True).decode(errors="ignore"))
     return "\n".join(text_parts)
 
+# ---------- Chunking ----------
+def chunk_text(text, chunk_size=3000):
+    """Split text into smaller chunks to avoid hitting API limits."""
+    return [text[i:i+chunk_size] for i in range(0, len(text), chunk_size)]
 
+# ---------- Upload & Embed ----------
 @router.post("/upload")
 async def upload_file(file: UploadFile = File(...), db: Session = Depends(get_db)):
     # Save file temporarily
@@ -61,7 +79,7 @@ async def upload_file(file: UploadFile = File(...), db: Session = Depends(get_db
     with open(file_path, "wb") as f:
         f.write(await file.read())
 
-    # Detect and extract text based on file type
+    # Extract text based on file type
     filename_lower = file.filename.lower()
     if filename_lower.endswith(".pdf"):
         content = extract_text_from_pdf(file_path)
@@ -69,21 +87,36 @@ async def upload_file(file: UploadFile = File(...), db: Session = Depends(get_db
         content = extract_text_from_docx(file_path)
     elif filename_lower.endswith(".eml"):
         content = extract_text_from_email(file_path)
-    else:  # Default: try reading as plain text
+    else:
         with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
             content = f.read()
 
-    # Get embedding
-    embedding = get_embedding_from_gemini(content)
+    if not content.strip():
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        raise HTTPException(status_code=400, detail="No readable text found in file.")
 
-    # Store in database
-    doc = DocumentEmbedding(
-        filename=file.filename,
-        content=content,
-        embedding=embedding
-    )
-    db.add(doc)
+    # Split into chunks
+    chunks = chunk_text(content)
+
+    all_embeddings = []
+    for chunk in chunks:
+        emb = get_embedding_from_gemini(chunk)
+        all_embeddings.append(emb)
+
+    # Store embeddings in DB
+    for i, emb in enumerate(all_embeddings):
+        doc = DocumentEmbedding(
+            filename=f"{file.filename} - chunk {i+1}",
+            content=chunks[i],
+            embedding=emb
+        )
+        db.add(doc)
     db.commit()
-    db.refresh(doc)
 
-    return {"message": "File uploaded and embedded successfully", "id": doc.id}
+    # Clean up temp files
+    shutil.rmtree(temp_dir, ignore_errors=True)
+
+    return {
+        "message": "File uploaded and embedded successfully",
+        "total_chunks": len(chunks)
+    }
